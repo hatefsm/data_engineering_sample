@@ -2,14 +2,24 @@
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
 # Local env/secrets
 .env
+.env.*
 
 # Local data/artifacts
 data/
 *.log
 
+# Jupyter
+.ipynb_checkpoints/
+
 # OS
 .DS_Store
+
+# PyCharm / IntelliJ
+.idea/
+*.iml
 
