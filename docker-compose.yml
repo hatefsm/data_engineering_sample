@@ -1,0 +1,14 @@
+# version 3.9
+
+services:
+  source_db:
+    image: postgres:16
+    container_name: source_postgres_db
+    environment:
+      POSTGRES_USER: demo_user
+      POSTGRES_PASSWORD: demo_pass
+      POSTGRES_DB: sample_source
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./sql:/docker-entrypoint-initdb.d

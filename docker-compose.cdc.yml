@@ -1,0 +1,56 @@
+#version: "3.9"
+
+services:
+  source_db:
+    image: postgres:16
+    container_name: source_postgres_db
+    environment:
+      POSTGRES_USER: demo_user
+      POSTGRES_PASSWORD: demo_pass
+      POSTGRES_DB: sample_source
+    ports:
+      - "5433:5432"
+    command: >
+      postgres -c wal_level=logical
+             -c max_wal_senders=10
+             -c max_replication_slots=10
+    volumes:
+      - ./sql:/docker-entrypoint-initdb.d
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on: [zookeeper]
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT_INTERNAL"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  connect:
+    image: debezium/connect:2.7.3.Final
+    container_name: debezium_connect
+    depends_on: [kafka, source_db]
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: "kafka:29092"
+      GROUP_ID: "debezium-connect"
+      CONFIG_STORAGE_TOPIC: "debezium_connect_configs"
+      OFFSET_STORAGE_TOPIC: "debezium_connect_offsets"
+      STATUS_STORAGE_TOPIC: "debezium_connect_status"
+      KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      OFFSET_FLUSH_INTERVAL_MS: 10000
