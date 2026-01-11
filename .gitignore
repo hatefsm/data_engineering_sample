@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local env/secrets
+.env
+
+# Local data/artifacts
+data/
+*.log
+
+# OS
+.DS_Store
+
