@@ -15,7 +15,7 @@ curl -s -X POST http://localhost:8083/connectors \
 
       "topic.prefix": "source_db",
       "schema.include.list": "public",
-      "table.include.list": "public.travelers,public.orders",
+      "table.include.list": "public.users,public.orders",
 
       "plugin.name": "pgoutput",
       "snapshot.mode": "initial",
