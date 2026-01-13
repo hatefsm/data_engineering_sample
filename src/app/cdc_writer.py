@@ -19,10 +19,13 @@ import json
 import signal
 import time
 import uuid
+import pyarrow as pa
+import pyarrow.parquet as pq
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
 
 from kafka import KafkaConsumer, TopicPartition  # pip install kafka-python
 
@@ -93,10 +96,17 @@ class LocalBronzeWriter:
     def write_events_file(self, t: BronzeTarget, file_index: int, lines: List[str]) -> Path:
         rd = self.run_dir(t)
         ensure_dir(rd)
-        fp = rd / f"events_{file_index:05d}.jsonl"
-        with fp.open("a", encoding="utf-8") as f:
-            for line in lines:
-                f.write(line + "\n")
+
+        fp = rd / f"events_{file_index:05d}.parquet"
+
+        ingest_ts = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+        table = pa.table({
+            "ingest_ts": [ingest_ts] * len(lines),
+            "raw_json": lines,
+        })
+
+        pq.write_table(table, fp, compression="snappy")
 
         rel = str(fp.relative_to(self.base))
         self.files_written.append(rel)

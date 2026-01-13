@@ -8,6 +8,7 @@ Design principles:
 - Reusable across CDC, snapshot, incremental pipelines
 """
 
+
 from __future__ import annotations
 
 import os
