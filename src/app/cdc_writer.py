@@ -19,8 +19,8 @@ import json
 import signal
 import time
 import uuid
-import pyarrow as pa
-import pyarrow.parquet as pq
+import pyarrow
+import pyarrow.parquet
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -101,12 +101,12 @@ class LocalBronzeWriter:
 
         ingest_ts = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
-        table = pa.table({
+        table = pyarrow.table({
             "ingest_ts": [ingest_ts] * len(lines),
             "raw_json": lines,
         })
 
-        pq.write_table(table, fp, compression="snappy")
+        pyarrow.parquet.write_table(table, fp, compression="snappy")
 
         rel = str(fp.relative_to(self.base))
         self.files_written.append(rel)
