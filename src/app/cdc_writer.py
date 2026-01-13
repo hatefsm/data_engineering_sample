@@ -1,6 +1,6 @@
 # src/app/cdc_writer.py
 """
-CDC Writer (Kafka -> Bronze JSONL + SQLite metadata)
+CDC Writer (Kafka -> Bronze Parquet + SQLite metadata)
 
 Consumes Debezium CDC events from Kafka topics and writes them to an append-only
 Bronze layer with run isolation. Also persists:
@@ -77,7 +77,7 @@ class BronzeTarget:
 
 
 class LocalBronzeWriter:
-    """Append-only JSONL writer with per-run folder isolation."""
+    """Append-only Parquet writer with per-run folder isolation."""
 
     def __init__(self, bronze_base_path: Path) -> None:
         self.base = bronze_base_path
