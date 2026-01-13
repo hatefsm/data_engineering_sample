@@ -29,9 +29,9 @@ from typing import Dict, List, Optional, Tuple
 
 from kafka import KafkaConsumer, TopicPartition  # pip install kafka-python
 
-from config import load_config
-from logging_utils import create_run_logger
-from metadata.sqlite_store import SQLiteMetadataStore
+from app.config import load_config
+from app.logging_utils import create_run_logger
+from app.metadata.sqlite_store import SQLiteMetadataStore
 
 
 # ----------------------------
