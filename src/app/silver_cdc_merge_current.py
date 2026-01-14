@@ -36,17 +36,22 @@ from typing import Dict, List, Optional, Set
 
 import pandas as pd
 
+from app.metadata_store import SQLiteMetadataStore
 
 # ----------------------------
 # Configuration
 # ----------------------------
 
+JOB_NAME = "silver_cdc_merge_current"
+
+
 @dataclass(frozen=True)
 class MergeOptions:
     table: str                   # "users" or "orders"
     silver_base: Path            # default: data/silver
+    db_path: Path                # sqlite metadata db path
     only_date: Optional[str]     # if set, process only this event_date (YYYY-MM-DD)
-    force: bool                  # if True, process even if checkpoint says done
+    force: bool                  # if True, reprocess even if metadata says done
 
 
 def _pk_col(table: str) -> str:
@@ -70,25 +75,6 @@ def _current_dir(opts: MergeOptions) -> Path:
 def _current_file(opts: MergeOptions) -> Path:
     return _current_dir(opts) / "current.parquet"
 
-def _checkpoint_file(opts: MergeOptions) -> Path:
-    return opts.silver_base / "current" / "_checkpoints" / f"table={opts.table}.json"
-
-
-# ----------------------------
-# Checkpoint helpers
-# ----------------------------
-
-def _load_checkpoint(fp: Path) -> Set[str]:
-    if not fp.exists():
-        return set()
-    data = json.loads(fp.read_text(encoding="utf-8"))
-    return set(data.get("processed_event_dates", []))
-
-def _save_checkpoint(fp: Path, processed: Set[str]) -> None:
-    fp.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"processed_event_dates": sorted(processed)}
-    fp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
 
 # ----------------------------
 # Discovery
@@ -104,15 +90,17 @@ def _discover_event_dates(opts: MergeOptions) -> List[str]:
             dates.append(p.name.split("=", 1)[1])
     return sorted(dates)
 
-def _dates_to_process(opts: MergeOptions) -> List[str]:
+def _dates_to_process(opts: MergeOptions, store: SQLiteMetadataStore) -> List[str]:
     all_dates = _discover_event_dates(opts)
+
     if opts.only_date:
         return [d for d in all_dates if d == opts.only_date]
 
-    ck = _load_checkpoint(_checkpoint_file(opts))
     if opts.force:
         return all_dates
-    return [d for d in all_dates if d not in ck]
+
+    processed = store.get_processed_silver_partitions(JOB_NAME, opts.table)
+    return [d for d in all_dates if d not in processed]
 
 
 # ----------------------------
@@ -128,16 +116,15 @@ def _read_stage_for_date(opts: MergeOptions, event_date: str) -> pd.DataFrame:
     dfs = [pd.read_parquet(f) for f in files]
     df = pd.concat(dfs, ignore_index=True)
 
-    # minimal expectations from stage builder
     needed = {"op", "ts_ms", "lsn", "is_delete", _pk_col(opts.table)}
     missing = needed - set(df.columns)
     if missing:
         raise ValueError(f"Stage data missing columns {missing} in {part_dir}")
 
-    # Dedup exact replays (safe at event level)
+    # Drop exact event replays (safe at event level)
     df = df.drop_duplicates(subset=[_pk_col(opts.table), "lsn", "ts_ms", "op"], keep="last")
 
-    # Order for deterministic application
+    # Deterministic ordering
     df = df.sort_values(by=["lsn", "ts_ms"], na_position="last").reset_index(drop=True)
     return df
 
@@ -152,15 +139,14 @@ def _read_current(opts: MergeOptions) -> pd.DataFrame:
 def _apply_events_to_current(opts: MergeOptions, current: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     pk = _pk_col(opts.table)
 
-    # Normalize current index
+    # Build index of current state by PK
     if current.empty:
         current_idx: Dict[int, Dict] = {}
     else:
-        # keep last occurrence per pk if any duplicates exist
         current = current.drop_duplicates(subset=[pk], keep="last")
         current_idx = {int(r[pk]): r for r in current.to_dict(orient="records")}
 
-    # Apply events in order
+    # Apply CDC events in order
     for r in events.to_dict(orient="records"):
         k = r.get(pk)
         if k is None:
@@ -174,18 +160,14 @@ def _apply_events_to_current(opts: MergeOptions, current: pd.DataFrame, events: 
             current_idx.pop(k, None)
             continue
 
-        # UPSERT: store the full row (excluding helper fields you don't want in current)
-        # Keep entity columns + optionally useful CDC metadata
+        # UPSERT: keep the whole staged row (includes CDC metadata + entity columns)
         current_idx[k] = r
 
-    # Build dataframe
     out = pd.DataFrame(list(current_idx.values()))
     if out.empty:
         return out
 
-    # Current table should be 1 row per PK
     out = out.drop_duplicates(subset=[pk], keep="last")
-
     return out
 
 
@@ -199,56 +181,80 @@ def _write_current(opts: MergeOptions, df: pd.DataFrame) -> Path:
 
 
 # ----------------------------
-# CLI
+# Main
 # ----------------------------
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--table", required=True, choices=["users", "orders"])
     parser.add_argument("--silver-base", default="data/silver")
+    parser.add_argument("--db-path", default="data/metadata/metadata.db", help="SQLite metadata DB path")
     parser.add_argument("--date", default=None, help="Process only this event_date (YYYY-MM-DD)")
-    parser.add_argument("--force", action="store_true", help="Reprocess even if checkpoint says done")
+    parser.add_argument("--force", action="store_true", help="Reprocess even if metadata says already processed")
     args = parser.parse_args()
 
     opts = MergeOptions(
         table=args.table,
         silver_base=Path(args.silver_base),
+        db_path=Path(args.db_path),
         only_date=args.date,
         force=bool(args.force),
     )
 
-    dates = _dates_to_process(opts)
-    if not dates:
-        print("Nothing to process.")
+    # Ensure DB folder exists
+    opts.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    store = SQLiteMetadataStore(opts.db_path)
+    run_id = uuid.uuid4().hex
+
+    try:
+        store.start_silver_run(run_id, JOB_NAME, opts.table)
+
+        dates = _dates_to_process(opts, store)
+        if not dates:
+            print("Nothing to process.")
+            store.end_silver_run(run_id, "SUCCESS", {"message": "nothing_to_process"})
+            return 0
+
+        current = _read_current(opts)
+
+        for d in dates:
+            events = _read_stage_for_date(opts, d)
+            if events.empty:
+                # still mark processed to avoid endless retries
+                store.mark_silver_partition_processed(
+                    JOB_NAME, opts.table, d, run_id, rows_in=0, rows_out=(0 if current.empty else len(current)), bad_rows=0
+                )
+                continue
+
+            before_n = 0 if current.empty else len(current)
+            current = _apply_events_to_current(opts, current, events)
+            after_n = 0 if current.empty else len(current)
+
+            print(f"Processed date={d} | events={len(events)} | current_rows: {before_n} -> {after_n}")
+
+            store.mark_silver_partition_processed(
+                JOB_NAME,
+                opts.table,
+                d,
+                run_id,
+                rows_in=int(len(events)),
+                rows_out=int(after_n),
+                bad_rows=0,
+            )
+
+        fp = _write_current(opts, current)
+        store.end_silver_run(run_id, "SUCCESS", {"current_file": str(fp), "processed_dates": dates})
+        print(f"Wrote current: {fp}")
+        print(f"Metadata DB: {opts.db_path}")
         return 0
 
-    # Load current once
-    current = _read_current(opts)
-
-    processed = _load_checkpoint(_checkpoint_file(opts))
-
-    for d in dates:
-        events = _read_stage_for_date(opts, d)
-        if events.empty:
-            # mark as processed to avoid looping forever
-            processed.add(d)
-            continue
-
-        before_n = 0 if current.empty else len(current)
-        current = _apply_events_to_current(opts, current, events)
-        after_n = 0 if current.empty else len(current)
-
-        print(f"Processed date={d} | events={len(events)} | current_rows: {before_n} -> {after_n}")
-        processed.add(d)
-
-    fp = _write_current(opts, current)
-    _save_checkpoint(_checkpoint_file(opts), processed)
-
-    print(f"Wrote current: {fp}")
-    print(f"Checkpoint: {_checkpoint_file(opts)}")
-    return 0
+    except Exception as e:
+        store.end_silver_run(run_id, "FAILED", {"error": str(e)})
+        raise
+    finally:
+        store.close()
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
