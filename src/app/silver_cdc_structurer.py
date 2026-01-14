@@ -1,5 +1,5 @@
 """
-Silver Staging (Bronze Compacted CDC -> Silver Stage Events)
+Silver Staging (Bronze Compacted CDC -> Silver structured Events)
 
 Purpose
 -------
