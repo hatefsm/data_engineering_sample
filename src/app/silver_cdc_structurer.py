@@ -4,7 +4,7 @@ Silver Staging (Bronze Compacted CDC -> Silver structured Events)
 Purpose
 -------
 This job converts Bronze compacted Debezium CDC events into a structured,
-typed "Silver staging" dataset.
+typed "Silver structured" dataset.
 
 It:
 - Reads events_compacted.parquet produced by bronze_compactor
