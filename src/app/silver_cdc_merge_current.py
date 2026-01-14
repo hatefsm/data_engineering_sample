@@ -36,7 +36,7 @@ from typing import Dict, List, Optional, Set
 
 import pandas as pd
 
-from app.metadata_store import SQLiteMetadataStore
+from app.metadata.metadata_store import SQLiteMetadataStore
 
 # ----------------------------
 # Configuration
