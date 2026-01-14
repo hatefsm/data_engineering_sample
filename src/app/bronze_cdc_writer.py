@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Tuple
 
 from kafka import KafkaConsumer, TopicPartition  # pip install kafka-python
 
-from app.aoo_config import load_config
+from app.app_config import load_config
 from app.app_logging import create_run_logger
 from app.metadata_store import SQLiteMetadataStore
 
